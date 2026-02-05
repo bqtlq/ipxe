@@ -99,7 +99,7 @@ jobs:
           path: |
             src/${{ env.bindir }}/BOOTX64.EFI
 
-  # 打包最终产物（BIOS+UEFI）
+  # 打包最终产物（BIOS+UEFI）- 核心修正：安装zip工具
   combine:
     name: Combine (BIOS + UEFI)
     runs-on: ubuntu-latest
@@ -115,6 +115,11 @@ jobs:
         with:
           pattern: "{bin,bin-x86_64-efi}"
           path: src/
+
+      - name: 安装zip工具（解决command not found）
+        run: |
+          # 更新源并安装zip
+          apt update && apt install -y zip
 
       - name: 打包超小体积iPXE文件
         run: |
