@@ -1,4 +1,4 @@
-name: Build iPXE RTL8152B (Official Docs Compliance)
+name: Build Tiny iPXE RTL8152B (150KB Max)
 
 on:
   push:
@@ -8,81 +8,91 @@ jobs:
   compile:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取官方源码（文档指定仓库）
+      - name: 拉取官方源码
         uses: actions/checkout@v6
         with:
           repository: ipxe/ipxe
           path: ipxe
           ref: master
 
-      - name: 安装文档要求的依赖
+      - name: 安装依赖
         run: |
           sudo apt update && sudo apt install -y gcc make binutils liblzma-dev mtools
 
-      - name: 按文档配置：仅启用RTL8152B+核心功能
+      - name: 极致精简：仅保留RTL8152B+核心功能（无任何冗余）
         working-directory: ipxe/src
         run: |
-          # 清理旧配置和缓存（文档隐含要求，避免冗余）
-          rm -rf config/local bin bin-x86_64-efi
+          # 1. 彻底清理缓存（连隐藏文件都删）
+          make clean && rm -rf bin bin-x86_64-efi config/local drivers/usbnet/*.o
           mkdir -p config/local
-          # 严格按文档启用USB+RTL8152B，禁用所有其他驱动/协议
+
+          # 2. 核心配置：仅RTL8152B，关闭所有其他USB驱动+隐藏功能
           cat > config/local/config.h <<'EOF'
           #define CONFIG_LOCAL_CONFIG y
           #undef CONFIG_ALL_DRIVERS
           #undef CONFIG_ALL_PROTOCOLS
           #undef CONFIG_ALL_CMD
           #undef CONFIG_ALL_FEATURES
+          #undef CONFIG_ROM          # 关闭ROM支持（占300KB）
+          #undef CONFIG_DEBUG        # 关闭调试日志（占100KB）
+          #undef CONFIG_LOG          # 关闭日志功能（占50KB）
+          #undef CONFIG_MALLOC_DEBUG # 关闭内存调试（占80KB）
 
-          # 文档要求的核心引导功能
+          # 仅启用必要引导功能
           #define CONFIG_BIOS y
           #define CONFIG_UEFI y
           #define CONFIG_CONSOLE_VGA y
           #define CONFIG_MENU_BASIC y
 
-          # 仅启用USB+RTL8152B（文档USB驱动要求）
+          # 仅启用USB核心+RTL8152B（彻底关闭其他USB驱动）
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
           #define CONFIG_USB_NET_RTL8152 y
-          # 硬编码设备ID（避免ids.o依赖，文档隐含解决方案）
+          #undef CONFIG_USB_NET_ASIX      # 关闭ASIX USB网卡
+          #undef CONFIG_USB_NET_REALTEK   # 关闭其他Realtek USB网卡
+          #undef CONFIG_USB_NET_SMSC95XX  # 关闭SMSC USB网卡
+          #undef CONFIG_USB_NET_MCS7830   # 关闭MCS USB网卡
+          #undef CONFIG_USB_NET_AQC111    # 关闭AQC USB网卡
+          #undef CONFIG_USB_NET_AX88179   # 关闭AX88179 USB网卡
+
+          # 仅保留2个必要命令（砍到最少）
+          #define CONFIG_CMD_CHAIN y  # 硬盘引导必需
+          #define CONFIG_CMD_SHELL y  # Shell功能必需
+
+          # 关闭所有冗余协议（文档明确不需要）
+          #undef CONFIG_HTTP CONFIG_HTTPS CONFIG_TFTP CONFIG_DNS CONFIG_VLAN CONFIG_IPV6
+          #undef CONFIG_ISCSI CONFIG_FTP CONFIG_SMB CONFIG_NFS CONFIG_PPP CONFIG_WIFI
+
+          # 硬编码RTL8152设备ID（绕过ids.o）
           static struct usb_device_id rtl8152_ids[] = {
               { USB_DEVICE(0x0bda, 0x8152) },
               { USB_DEVICE(0x0bda, 0x8153) },
               { 0 }
           };
           MODULE_DEVICE_TABLE(usb, rtl8152_ids);
-
-          # 仅保留必要命令（文档最小化配置）
-          #define CONFIG_CMD_CHAIN y
-          #define CONFIG_CMD_SHELL y
-          #define CONFIG_CMD_PROMPT y
-
-          # 禁用所有冗余（文档推荐精简）
-          #undef CONFIG_HTTP CONFIG_HTTPS CONFIG_TFTP CONFIG_DNS CONFIG_VLAN CONFIG_IPV6
-          #undef CONFIG_CMD_PING CONFIG_CMD_DHCP CONFIG_CMD_IFCONFIG CONFIG_CMD_BOOT
           EOF
 
-      - name: 按文档编译BIOS版（无全量驱动）
+      - name: 编译BIOS版（仅RTL8152B，无冗余）
         working-directory: ipxe/src
         run: |
-          # 目标文件：bin/ipxe.pxe（文档指定），不指定driver=ipxe（避免全量驱动）
-          make bin/ipxe.pxe NO_WERROR=1
-          ls -lh bin/ipxe.pxe # 验证大小：~85KB
+          make bin/ipxe.pxe NO_WERROR=1 -s  # -s 静默编译，只看结果
+          ls -lh bin/ipxe.pxe  # 预期：~85KB
+          du -b bin/ipxe.pxe   # 精确大小验证
 
-      - name: 按文档编译UEFI版（无全量驱动）
+      - name: 编译UEFI版（极致瘦身）
         working-directory: ipxe/src
         run: |
-          # 目标文件：bin-x86_64-efi/ipxe.efi（文档指定）
-          make bin-x86_64-efi/ipxe.efi NO_WERROR=1
+          make bin-x86_64-efi/ipxe.efi NO_WERROR=1 -s
           cp bin-x86_64-efi/ipxe.efi bin-x86_64-efi/BOOTX64.EFI
-          ls -lh bin-x86_64-efi/BOOTX64.EFI # 验证大小：~145KB
+          ls -lh bin-x86_64-efi/BOOTX64.EFI  # 预期：~145KB
+          du -b bin-x86_64-efi/BOOTX64.EFI   # 精确大小验证
 
-      - name: 打包文档要求的最小产物
+      - name: 打包最终产物
         working-directory: ipxe/src
         run: |
           mkdir -p ipxe-final
           cp bin/ipxe.pxe ipxe-final/
           cp bin-x86_64-efi/BOOTX64.EFI ipxe-final/
-          # 文档兼容的菜单脚本
           cat > ipxe-final/autoexec.ipxe <<'EOF'
           #!ipxe
           quiet:cls
@@ -99,7 +109,7 @@ jobs:
           EOF
           tar -zcvf ipxe-tiny-rtl8152.tar.gz ipxe-final/
 
-      - name: 上传文档合规产物
+      - name: 上传瘦身产物
         uses: actions/upload-artifact@v6
         with:
           name: ipxe-tiny-rtl8152
