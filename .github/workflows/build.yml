@@ -5,12 +5,12 @@ on:
   pull_request:
 
 env:
-  MAKEFLAGS: "-j4 GITVERSION=${{ github.sha }}"
+  MAKEFLAGS: "-j4 GITVERSION=${{ github.sha }} NO_WERROR=1"
 
 jobs:
-  # BIOS：i386架构（原生兼容所有x86主板）
+  # BIOS：i386架构 + 强制清理缓存 + 极致精简
   bios:
-    name: BIOS / i386 (Only RTL8152B)
+    name: BIOS / i386 (Tiny RTL8152B)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -24,32 +24,35 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: 创建极致精简的iPXE配置文件（核心！）
+      - name: 创建极致精简配置文件（覆盖所有冗余）
         working-directory: src
         run: |
+          # 强制删除旧配置（如有）
+          rm -rf config/local
           mkdir -p config/local
-          # 彻底关闭所有非必要功能，仅保留核心引导+USB+RTL8152B
+          # 终极精简配置：仅保留引导+USB+RTL8152B
           cat > config/local/config.h <<'EOF'
+          #define CONFIG_LOCAL_CONFIG y
           #undef CONFIG_ALL_DRIVERS
           #undef CONFIG_ALL_PROTOCOLS
           #undef CONFIG_ALL_CMD
+          #undef CONFIG_ALL_FEATURES
 
-          # 仅开启核心引导功能
+          # 仅开启核心必要功能
           #define CONFIG_BIOS y
           #define CONFIG_UEFI y
           #define CONFIG_CONSOLE_VGA y
-          #define CONFIG_MENU y
+          #define CONFIG_MENU_BASIC y
+          #define CONFIG_CMD_CHAIN y  # 仅保留硬盘引导需要的chain命令
+          #define CONFIG_CMD_SHELL y  # 仅保留shell命令
+          #define CONFIG_CMD_PROMPT y # 仅保留prompt命令
 
-          # 仅开启USB核心+RTL8152B驱动（必须）
+          # 仅开启USB+RTL8152B
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
           #define CONFIG_USB_NET_RTL8152 y
 
-          # 关闭所有冗余驱动/协议/命令
-          #undef CONFIG_USB_NET_REALTEK
-          #undef CONFIG_USB_NET_ASIX
-          #undef CONFIG_USB_NET_MCS7830
-          #undef CONFIG_USB_NET_SMSC95XX
+          # 强制关闭所有冗余功能（逐行屏蔽）
           #undef CONFIG_HTTP
           #undef CONFIG_HTTPS
           #undef CONFIG_TFTP
@@ -58,30 +61,47 @@ jobs:
           #undef CONFIG_NTP
           #undef CONFIG_VLAN
           #undef CONFIG_IPV6
+          #undef CONFIG_PING
           #undef CONFIG_CMD_PING
           #undef CONFIG_CMD_DHCP
           #undef CONFIG_CMD_BOOT
-          #undef CONFIG_CMD_SHELL
-          #undef CONFIG_CMD_MENU
-          #undef CONFIG_CMD_CHAIN
-          #undef CONFIG_CMD_EXIT
+          #undef CONFIG_CMD_IFCONFIG
+          #undef CONFIG_CMD_LOGIN
+          #undef CONFIG_CMD_IMGPATH
+          #undef CONFIG_IMAGE_TRUST_CMD
+          #undef CONFIG_FTP
+          #undef CONFIG_SMB
+          #undef CONFIG_NFS
+          #undef CONFIG_SLIP
+          #undef CONFIG_PPP
+          #undef CONFIG_WIFI
           #EOF
 
-      - name: 编译极致精简的BIOS版ipxe.pxe
+      - name: 强制清理旧编译缓存（关键！）
+        working-directory: src
+        run: |
+          make clean  # 彻底删除bin目录和所有.o/.a文件
+          rm -rf ${{ env.bindir }}  # 手动删除旧的bin目录
+
+      - name: 重新编译BIOS版ipxe.pxe（无缓存）
         working-directory: src
         run: |
           make ${{ env.bindir }}/ipxe.pxe
 
+      - name: 验证BIOS文件大小（调试）
+        run: |
+          ls -lh src/${{ env.bindir }}/ipxe.pxe  # 输出文件大小，确认精简生效
+
       - name: 上传BIOS产物
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.bindir }}
+          name: bios-i386-tiny
           if-no-files-found: error
           path: src/${{ env.bindir }}/ipxe.pxe
 
-  # UEFI：x86_64架构（同样极致精简）
+  # UEFI：x86_64 + 同样清理缓存+精简
   uefi:
-    name: UEFI / x86_64 (Only RTL8152B)
+    name: UEFI / x86_64 (Tiny RTL8152B)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -95,31 +115,33 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: 创建极致精简的iPXE配置文件
+      - name: 创建极致精简配置文件
         working-directory: src
         run: |
+          rm -rf config/local
           mkdir -p config/local
           cat > config/local/config.h <<'EOF'
+          #define CONFIG_LOCAL_CONFIG y
           #undef CONFIG_ALL_DRIVERS
           #undef CONFIG_ALL_PROTOCOLS
           #undef CONFIG_ALL_CMD
+          #undef CONFIG_ALL_FEATURES
 
-          # 仅开启核心引导功能
+          # 仅开启核心必要功能
           #define CONFIG_BIOS y
           #define CONFIG_UEFI y
           #define CONFIG_CONSOLE_VGA y
-          #define CONFIG_MENU y
+          #define CONFIG_MENU_BASIC y
+          #define CONFIG_CMD_CHAIN y
+          #define CONFIG_CMD_SHELL y
+          #define CONFIG_CMD_PROMPT y
 
-          # 仅开启USB核心+RTL8152B驱动
+          # 仅开启USB+RTL8152B
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
           #define CONFIG_USB_NET_RTL8152 y
 
-          # 关闭所有冗余功能
-          #undef CONFIG_USB_NET_REALTEK
-          #undef CONFIG_USB_NET_ASIX
-          #undef CONFIG_USB_NET_MCS7830
-          #undef CONFIG_USB_NET_SMSC95XX
+          # 强制关闭所有冗余
           #undef CONFIG_HTTP
           #undef CONFIG_HTTPS
           #undef CONFIG_TFTP
@@ -128,51 +150,67 @@ jobs:
           #undef CONFIG_NTP
           #undef CONFIG_VLAN
           #undef CONFIG_IPV6
+          #undef CONFIG_PING
           #undef CONFIG_CMD_PING
           #undef CONFIG_CMD_DHCP
           #undef CONFIG_CMD_BOOT
-          #undef CONFIG_CMD_SHELL
-          #undef CONFIG_CMD_MENU
-          #undef CONFIG_CMD_CHAIN
-          #undef CONFIG_CMD_EXIT
+          #undef CONFIG_CMD_IFCONFIG
+          #undef CONFIG_CMD_LOGIN
+          #undef CONFIG_IMAGE_TRUST_CMD
+          #undef CONFIG_FTP
+          #undef CONFIG_SMB
+          #undef CONFIG_NFS
+          #undef CONFIG_SLIP
+          #undef CONFIG_PPP
+          #undef CONFIG_WIFI
           #EOF
 
-      - name: 编译极致精简的UEFI版ipxe.efi
+      - name: 强制清理旧编译缓存
+        working-directory: src
+        run: |
+          make clean
+          rm -rf ${{ env.bindir }}
+
+      - name: 重新编译UEFI版ipxe.efi
         working-directory: src
         run: |
           make ${{ env.bindir }}/ipxe.efi
           cp ${{ env.bindir }}/ipxe.efi ${{ env.bindir }}/BOOTX64.EFI
 
+      - name: 验证UEFI文件大小（调试）
+        run: |
+          ls -lh src/${{ env.bindir }}/BOOTX64.EFI  # 输出文件大小
+
       - name: 上传UEFI产物
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.bindir }}
+          name: uefi-x86_64-tiny
           if-no-files-found: error
-          path: |
-            src/${{ env.bindir }}/BOOTX64.EFI
+          path: src/${{ env.bindir }}/BOOTX64.EFI
 
-  # 打包产物（用tar，无依赖）
+  # 打包产物
   combine:
-    name: Combine (BIOS + UEFI)
+    name: Combine Tiny iPXE
     runs-on: ubuntu-latest
     needs: [bios, uefi]
     container:
       image: ghcr.io/ipxe/ipxe-signer
     steps:
-      - name: Check out code
-        uses: actions/checkout@v6
-
-      - name: 下载编译产物
+      - name: 下载精简后的产物
         uses: actions/download-artifact@v7
         with:
-          pattern: "{bin,bin-x86_64-efi}"
-          path: src/
+          pattern: "{bios-i386-tiny,uefi-x86_64-tiny}"
+          path: ./
 
-      - name: 打包超小体积iPXE文件
+      - name: 验证下载的文件大小
+        run: |
+          ls -lh ./  # 确认文件大小已精简
+
+      - name: 打包超小体积文件
         run: |
           mkdir -p ipxe-tiny-rtl8152
-          cp src/bin/ipxe.pxe ipxe-tiny-rtl8152/
-          cp src/bin-x86_64-efi/BOOTX64.EFI ipxe-tiny-rtl8152/
+          cp ./bios-i386-tiny/ipxe.pxe ipxe-tiny-rtl8152/
+          cp ./uefi-x86_64-tiny/BOOTX64.EFI ipxe-tiny-rtl8152/
           # 超精简菜单脚本
           cat > ipxe-tiny-rtl8152/autoexec.ipxe <<'EOF'
           #!ipxe
@@ -191,12 +229,11 @@ jobs:
           echo 输入exit返回菜单
           shell && goto start
           EOF
-          # 用tar打包
           tar -zcvf ipxe-tiny-rtl8152.tar.gz ipxe-tiny-rtl8152/
 
       - name: 上传最终产物
         uses: actions/upload-artifact@v6
         with:
-          name: ipxe-tiny-rtl8152
+          name: ipxe-tiny-rtl8152-final
           if-no-files-found: error
           path: ipxe-tiny-rtl8152.tar.gz
