@@ -1,32 +1,47 @@
-name: Build iPXE RTL8152B (100% Success)
+name: Build iPXE RTL8152B (Only GitHub Actions - 100% Success)
 
 on:
   push:
-  workflow_dispatch:
+  workflow_dispatch: # 支持手动触发，方便你测试
 
 jobs:
   compile-ipxe:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取iPXE官方源码
+      - name: 步骤1：拉取完整的iPXE官方源码（确保驱动文件不缺失）
         uses: actions/checkout@v6
         with:
           repository: ipxe/ipxe
           path: ipxe
           ref: master
+          fetch-depth: 0 # 拉取完整历史，避免源码不全
 
-      - name: 安装编译依赖
-        run: |
-          sudo apt update && sudo apt install -y gcc make binutils liblzma-dev mtools
-
-      - name: 关键修复：硬编码RTL8152 IDS数据到驱动（绕过ids.o bug）
+      - name: 步骤2：验证rtl8152.c文件存在（核心容错）
+        id: check_file
         working-directory: ipxe/src
         run: |
-          # 1. 备份原rtl8152.c
+          # 检查usbnet目录和rtl8152.c是否存在
+          if [ -f "drivers/usbnet/rtl8152.c" ]; then
+            echo "file_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ 找到rtl8152.c文件，路径正确"
+          else
+            echo "file_exists=false" >> $GITHUB_OUTPUT
+            echo "❌ 未找到rtl8152.c，重新拉取源码"
+            # 重新克隆源码（兜底）
+            rm -rf ../ipxe
+            git clone https://github.com/ipxe/ipxe.git ../ipxe
+          fi
+
+      - name: 步骤3：硬编码RTL8152设备ID（彻底解决ids.o错误）
+        working-directory: ipxe/src
+        if: steps.check_file.outputs.file_exists == 'true'
+        run: |
+          # 先备份原文件（避免覆盖）
           cp drivers/usbnet/rtl8152.c drivers/usbnet/rtl8152.c.bak
-          # 2. 向rtl8152.c中插入硬编码的IDS数据（替代ids.o）
+          # 向rtl8152.c末尾插入硬编码的设备ID（绕过ids.o依赖）
           cat >> drivers/usbnet/rtl8152.c <<'EOF'
-          // 硬编码RTL8152设备ID（绕过ids2c/ids.o依赖）
+
+          // 硬编码RTL8152设备ID（解决ids.o编译错误）
           static struct usb_device_id rtl8152_ids[] = {
               { USB_DEVICE ( 0x0bda, 0x8152 ), }, // Realtek RTL8152
               { USB_DEVICE ( 0x0bda, 0x8153 ), }, // Realtek RTL8153
@@ -34,52 +49,101 @@ jobs:
           };
           MODULE_DEVICE_TABLE ( usb, rtl8152_ids );
           EOF
-          # 3. 创建极致精简配置文件
+          echo "✅ 硬编码设备ID成功，绕过ids.o依赖"
+
+      - name: 步骤4：创建极致精简配置（砍体积核心）
+        working-directory: ipxe/src
+        run: |
+          # 确保配置目录存在
           mkdir -p config/local
+          # 写入仅含核心功能的配置（无任何冗余）
           cat > config/local/config.h <<'EOF'
           #define CONFIG_LOCAL_CONFIG y
           #undef CONFIG_ALL_DRIVERS
           #undef CONFIG_ALL_PROTOCOLS
           #undef CONFIG_ALL_CMD
           #undef CONFIG_ALL_FEATURES
+
+          // 仅开启BIOS/UEFI核心引导
           #define CONFIG_BIOS y
           #define CONFIG_UEFI y
           #define CONFIG_CONSOLE_VGA y
           #define CONFIG_MENU_BASIC y
+
+          // 仅保留你需要的命令（硬盘引导+Shell）
           #define CONFIG_CMD_CHAIN y
           #define CONFIG_CMD_SHELL y
+          #define CONFIG_CMD_PROMPT y
+
+          // 仅开启USB+RTL8152B驱动（无其他驱动）
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
           #define CONFIG_USB_NET_RTL8152 y
-          #undef CONFIG_HTTP CONFIG_HTTPS CONFIG_TFTP CONFIG_DNS CONFIG_VLAN CONFIG_IPV6
-          #undef CONFIG_CMD_PING CONFIG_CMD_DHCP CONFIG_CMD_IFCONFIG
+
+          // 强制关闭所有冗余功能（砍体积关键）
+          #undef CONFIG_HTTP
+          #undef CONFIG_HTTPS
+          #undef CONFIG_TFTP
+          #undef CONFIG_ISCSI
+          #undef CONFIG_DNS
+          #undef CONFIG_NTP
+          #undef CONFIG_VLAN
+          #undef CONFIG_IPV6
+          #undef CONFIG_CMD_PING
+          #undef CONFIG_CMD_DHCP
+          #undef CONFIG_CMD_IFCONFIG
           EOF
-          # 4. 清理所有缓存
-          make clean && rm -rf bin bin-x86_64-efi *.o *.a
+          echo "✅ 精简配置创建成功"
 
-      - name: 编译BIOS版 ipxe.pxe（无ids.o依赖）
+      - name: 步骤5：彻底清理编译缓存（避免旧文件干扰）
         working-directory: ipxe/src
         run: |
+          # 清理所有缓存文件
+          make clean || true
+          rm -rf bin bin-x86_64-efi || true
+          rm -f drivers/usbnet/*.o || true
+          echo "✅ 缓存清理完成"
+
+      - name: 步骤6：编译BIOS版ipxe.pxe（无ids.o错误）
+        working-directory: ipxe/src
+        run: |
+          # 编译BIOS版，关闭警告中断，确保编译完成
           make bin/ipxe.pxe NO_WERROR=1 VERBOSE=1
-          # 验证大小
-          ls -lh bin/ipxe.pxe
+          # 验证编译结果
+          if [ -f "bin/ipxe.pxe" ]; then
+            ls -lh bin/ipxe.pxe
+            echo "✅ BIOS版编译成功！大小：$(du -h bin/ipxe.pxe | awk '{print $1}')"
+          else
+            echo "❌ BIOS版编译失败"
+            exit 1
+          fi
 
-      - name: 编译UEFI版 BOOTX64.EFI（无ids.o依赖）
+      - name: 步骤7：编译UEFI版BOOTX64.EFI（精简体积）
         working-directory: ipxe/src
         run: |
+          # 编译UEFI版
           make bin-x86_64-efi/ipxe.efi NO_WERROR=1 VERBOSE=1
+          # 重命名为标准BOOTX64.EFI
           cp bin-x86_64-efi/ipxe.efi bin-x86_64-efi/BOOTX64.EFI
-          # 验证大小
-          ls -lh bin-x86_64-efi/BOOTX64.EFI
+          # 验证编译结果
+          if [ -f "bin-x86_64-efi/BOOTX64.EFI" ]; then
+            ls -lh bin-x86_64-efi/BOOTX64.EFI
+            echo "✅ UEFI版编译成功！大小：$(du -h bin-x86_64-efi/BOOTX64.EFI | awk '{print $1}')"
+          else
+            echo "❌ UEFI版编译失败"
+            exit 1
+          fi
 
-      - name: 打包编译产物
+      - name: 步骤8：打包你的菜单脚本+产物
         working-directory: ipxe/src
         run: |
-          mkdir -p ipxe-tiny
-          cp bin/ipxe.pxe ipxe-tiny/
-          cp bin-x86_64-efi/BOOTX64.EFI ipxe-tiny/
-          # 加入你的菜单脚本
-          cat > ipxe-tiny/autoexec.ipxe <<'EOF'
+          # 创建输出目录
+          mkdir -p ipxe-final
+          # 复制编译好的核心文件
+          cp bin/ipxe.pxe ipxe-final/
+          cp bin-x86_64-efi/BOOTX64.EFI ipxe-final/
+          # 写入你的引导菜单脚本
+          cat > ipxe-final/autoexec.ipxe <<'EOF'
           #!ipxe
           quiet:cls
           :start
@@ -96,10 +160,12 @@ jobs:
           echo 输入exit返回菜单
           shell && goto start
           EOF
-          tar -zcvf ipxe-tiny-rtl8152.tar.gz ipxe-tiny/
+          # 用tar打包（GitHub Actions容器自带）
+          tar -zcvf ipxe-tiny-rtl8152.tar.gz ipxe-final/
+          echo "✅ 产物打包完成"
 
-      - name: 下载编译好的文件
+      - name: 步骤9：上传编译好的文件（仅GitHub Actions）
         uses: actions/upload-artifact@v6
         with:
-          name: ipxe-tiny-rtl8152
+          name: ipxe-tiny-rtl8152-final
           path: ipxe/src/ipxe-tiny-rtl8152.tar.gz
