@@ -24,22 +24,50 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: 创建iPXE本地配置文件（关键！）
+      - name: 创建极致精简的iPXE配置文件（核心！）
         working-directory: src
         run: |
           mkdir -p config/local
+          # 彻底关闭所有非必要功能，仅保留核心引导+USB+RTL8152B
           cat > config/local/config.h <<'EOF'
           #undef CONFIG_ALL_DRIVERS
+          #undef CONFIG_ALL_PROTOCOLS
+          #undef CONFIG_ALL_CMD
+
+          # 仅开启核心引导功能
+          #define CONFIG_BIOS y
+          #define CONFIG_UEFI y
+          #define CONFIG_CONSOLE_VGA y
+          #define CONFIG_MENU y
+
+          # 仅开启USB核心+RTL8152B驱动（必须）
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
           #define CONFIG_USB_NET_RTL8152 y
+
+          # 关闭所有冗余驱动/协议/命令
           #undef CONFIG_USB_NET_REALTEK
           #undef CONFIG_USB_NET_ASIX
           #undef CONFIG_USB_NET_MCS7830
           #undef CONFIG_USB_NET_SMSC95XX
+          #undef CONFIG_HTTP
+          #undef CONFIG_HTTPS
+          #undef CONFIG_TFTP
+          #undef CONFIG_ISCSI
+          #undef CONFIG_DNS
+          #undef CONFIG_NTP
+          #undef CONFIG_VLAN
+          #undef CONFIG_IPV6
+          #undef CONFIG_CMD_PING
+          #undef CONFIG_CMD_DHCP
+          #undef CONFIG_CMD_BOOT
+          #undef CONFIG_CMD_SHELL
+          #undef CONFIG_CMD_MENU
+          #undef CONFIG_CMD_CHAIN
+          #undef CONFIG_CMD_EXIT
           #EOF
 
-      - name: 编译BIOS版ipxe.pxe（仅RTL8152B）
+      - name: 编译极致精简的BIOS版ipxe.pxe
         working-directory: src
         run: |
           make ${{ env.bindir }}/ipxe.pxe
@@ -51,7 +79,7 @@ jobs:
           if-no-files-found: error
           path: src/${{ env.bindir }}/ipxe.pxe
 
-  # UEFI：x86_64架构（同样用本地配置文件）
+  # UEFI：x86_64架构（同样极致精简）
   uefi:
     name: UEFI / x86_64 (Only RTL8152B)
     runs-on: ubuntu-latest
@@ -67,22 +95,49 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: 创建iPXE本地配置文件（关键！）
+      - name: 创建极致精简的iPXE配置文件
         working-directory: src
         run: |
           mkdir -p config/local
           cat > config/local/config.h <<'EOF'
           #undef CONFIG_ALL_DRIVERS
+          #undef CONFIG_ALL_PROTOCOLS
+          #undef CONFIG_ALL_CMD
+
+          # 仅开启核心引导功能
+          #define CONFIG_BIOS y
+          #define CONFIG_UEFI y
+          #define CONFIG_CONSOLE_VGA y
+          #define CONFIG_MENU y
+
+          # 仅开启USB核心+RTL8152B驱动
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
           #define CONFIG_USB_NET_RTL8152 y
+
+          # 关闭所有冗余功能
           #undef CONFIG_USB_NET_REALTEK
           #undef CONFIG_USB_NET_ASIX
           #undef CONFIG_USB_NET_MCS7830
           #undef CONFIG_USB_NET_SMSC95XX
+          #undef CONFIG_HTTP
+          #undef CONFIG_HTTPS
+          #undef CONFIG_TFTP
+          #undef CONFIG_ISCSI
+          #undef CONFIG_DNS
+          #undef CONFIG_NTP
+          #undef CONFIG_VLAN
+          #undef CONFIG_IPV6
+          #undef CONFIG_CMD_PING
+          #undef CONFIG_CMD_DHCP
+          #undef CONFIG_CMD_BOOT
+          #undef CONFIG_CMD_SHELL
+          #undef CONFIG_CMD_MENU
+          #undef CONFIG_CMD_CHAIN
+          #undef CONFIG_CMD_EXIT
           #EOF
 
-      - name: 编译UEFI版ipxe.efi（仅RTL8152B）
+      - name: 编译极致精简的UEFI版ipxe.efi
         working-directory: src
         run: |
           make ${{ env.bindir }}/ipxe.efi
@@ -96,7 +151,7 @@ jobs:
           path: |
             src/${{ env.bindir }}/BOOTX64.EFI
 
-  # 打包最终产物（BIOS+UEFI）- 核心修正：用tar替代zip，无需安装任何工具
+  # 打包产物（用tar，无依赖）
   combine:
     name: Combine (BIOS + UEFI)
     runs-on: ubuntu-latest
@@ -113,14 +168,12 @@ jobs:
           pattern: "{bin,bin-x86_64-efi}"
           path: src/
 
-      - name: 打包超小体积iPXE文件（用tar，无需安装依赖）
+      - name: 打包超小体积iPXE文件
         run: |
-          # 创建输出目录
           mkdir -p ipxe-tiny-rtl8152
-          # 复制核心文件
           cp src/bin/ipxe.pxe ipxe-tiny-rtl8152/
           cp src/bin-x86_64-efi/BOOTX64.EFI ipxe-tiny-rtl8152/
-          # 加入超精简菜单脚本
+          # 超精简菜单脚本
           cat > ipxe-tiny-rtl8152/autoexec.ipxe <<'EOF'
           #!ipxe
           quiet:cls
@@ -138,7 +191,7 @@ jobs:
           echo 输入exit返回菜单
           shell && goto start
           EOF
-          # 用tar打包（所有容器都内置tar，无需安装）
+          # 用tar打包
           tar -zcvf ipxe-tiny-rtl8152.tar.gz ipxe-tiny-rtl8152/
 
       - name: 上传最终产物
