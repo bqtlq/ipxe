@@ -8,27 +8,27 @@ env:
   MAKEFLAGS: "-j4 GITVERSION=${{ github.sha }}"
 
 jobs:
-  # 修正：BIOS编译i386架构（原生支持RTL8152B，兼容64位主板）
+  # BIOS：i386架构（原生支持），显式开启USB配置
   bios:
     name: BIOS / i386 (Only RTL8152B)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        arch: [i386] # 改回i386，解决驱动编译问题
+        arch: [i386]
     container:
       image: ghcr.io/ipxe/ipxe-builder-${{ matrix.arch }}
     env:
-      bindir: bin # i386 BIOS的默认目录是bin，不是bin-x86_64-pcbios
+      bindir: bin
     steps:
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: Build (Only RTL8152B)
+      - name: Build (Enable USB + Only RTL8152B)
         working-directory: src
         run: |
-          # i386 BIOS编译ipxe.pxe，DRIVERS参数正常生效
-          make ${{ env.bindir }}/ipxe.pxe DRIVERS=usbnet/rtl8152
+          # 核心修正：添加CONFIG_USB=y启用USB核心，再指定驱动
+          make ${{ env.bindir }}/ipxe.pxe CONFIG_USB=y DRIVERS=usbnet/rtl8152
 
       - name: Upload BIOS artifact
         uses: actions/upload-artifact@v6
@@ -37,6 +37,7 @@ jobs:
           if-no-files-found: error
           path: src/${{ env.bindir }}/ipxe.pxe
 
+  # UEFI：x86_64架构，同样需要开启USB配置
   uefi:
     name: UEFI / x86_64 (Only RTL8152B)
     runs-on: ubuntu-latest
@@ -52,11 +53,11 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: Build (Only RTL8152B)
+      - name: Build (Enable USB + Only RTL8152B)
         working-directory: src
         run: |
-          # UEFI 64位编译正常，保留DRIVERS参数
-          make ${{ env.bindir }}/ipxe.efi DRIVERS=usbnet/rtl8152
+          # UEFI版同样需要CONFIG_USB=y
+          make ${{ env.bindir }}/ipxe.efi CONFIG_USB=y DRIVERS=usbnet/rtl8152
           cp ${{ env.bindir }}/ipxe.efi ${{ env.bindir }}/BOOTX64.EFI
 
       - name: Upload UEFI artifact
@@ -67,6 +68,7 @@ jobs:
           path: |
             src/${{ env.bindir }}/BOOTX64.EFI
 
+  # 打包产物：和之前一致，仅路径匹配i386 BIOS的bin目录
   combine:
     name: Combine (BIOS + UEFI)
     runs-on: ubuntu-latest
@@ -74,7 +76,6 @@ jobs:
     container:
       image: ghcr.io/ipxe/ipxe-signer
     env:
-      # 修正BIOS文件路径为i386的bin/ipxe.pxe
       binaries: >-
         bin/ipxe.pxe
         bin-x86_64-efi/BOOTX64.EFI
@@ -85,16 +86,15 @@ jobs:
       - name: Download artifacts (BIOS + UEFI)
         uses: actions/download-artifact@v7
         with:
-          pattern: "{bin,bin-x86_64-efi}" # 匹配i386 BIOS的bin目录
+          pattern: "{bin,bin-x86_64-efi}"
           path: src/
 
       - name: Pack tiny iPXE files (Only RTL8152B)
         run: |
           mkdir -p ipxe-tiny-rtl8152
-          # 复制i386 BIOS的ipxe.pxe
           cp src/bin/ipxe.pxe ipxe-tiny-rtl8152/
           cp src/bin-x86_64-efi/BOOTX64.EFI ipxe-tiny-rtl8152/
-          # 超精简菜单脚本
+          # 保留超精简菜单脚本
           cat > ipxe-tiny-rtl8152/autoexec.ipxe <<'EOF'
           #!ipxe
           quiet:cls
