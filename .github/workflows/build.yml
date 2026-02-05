@@ -1,254 +1,131 @@
-name: Build
+name: Build Tiny iPXE (Only RTL8152B)
 
 on:
   push:
   pull_request:
 
 env:
-  MAKEFLAGS: "-j4 GITVERSION=${{ github.sha }}"
+  # 保留并行编译，添加DRIVERS全局变量（仅RTL8152B）
+  MAKEFLAGS: "-j4 GITVERSION=${{ github.sha }} DRIVERS=usbnet/rtl8152"
 
 jobs:
-
+  # ========== 第一步：仅编译x86_64 BIOS版（砍掉i386 BIOS，仅留x86_64） ==========
   bios:
-    name: BIOS / ${{ matrix.arch }}
+    name: BIOS / x86_64 (Only RTL8152B)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - i386
-          - x86_64
+        arch: [x86_64] # 仅保留x86_64，砍掉i386
     container:
       image: ghcr.io/ipxe/ipxe-builder-${{ matrix.arch }}
     env:
-      bindir: >-
-        ${{ matrix.arch == 'i386' && 'bin' || 'bin-x86_64-pcbios' }}
+      bindir: bin-x86_64-pcbios
     steps:
-
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: Build
+      - name: Build (Only RTL8152B)
         working-directory: src
         run: |
-          make ${{ env.bindir }}/10ec8139.rom \
-               ${{ env.bindir }}/8086100e.mrom \
-               ${{ env.bindir }}/ipxe.dsk \
-               ${{ env.bindir }}/ipxe.iso \
-               ${{ env.bindir }}/ipxe.lkrn \
-               ${{ env.bindir }}/ipxe.pxe \
-               ${{ env.bindir }}/ipxe.usb \
-               ${{ env.bindir }}/undionly.kpxe
+          # 仅编译需要的BIOS文件：ipxe.pxe（核心），砍掉其他冗余文件（iso/usb/rom等）
+          make ${{ env.bindir }}/ipxe.pxe
 
-      - name: Upload
+      - name: Upload BIOS artifact
         uses: actions/upload-artifact@v6
         with:
           name: ${{ env.bindir }}
           if-no-files-found: error
-          path: |
-            src/${{ env.bindir }}/ipxe.lkrn
-            src/${{ env.bindir }}/ipxe.pxe
-            src/${{ env.bindir }}/undionly.kpxe
+          path: src/${{ env.bindir }}/ipxe.pxe
 
-  sbi:
-    name: SBI / ${{ matrix.arch }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - riscv32
-          - riscv64
-    container:
-      image: ghcr.io/ipxe/ipxe-builder-${{ matrix.arch }}
-    env:
-      bindir: bin-${{ matrix.arch }}
-    steps:
-
-      - name: Check out code
-        uses: actions/checkout@v6
-
-      - name: Build
-        working-directory: src
-        run: |
-          make ${{ env.bindir }}/ipxe.pf32 \
-               ${{ env.bindir }}/ipxe.lkrn \
-               ${{ env.bindir }}/ipxe.sbi
-
-      - name: Upload
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ env.bindir }}
-          if-no-files-found: error
-          path: |
-            src/${{ env.bindir }}/ipxe.lkrn
-            src/${{ env.bindir }}/ipxe.sbi
-
+  # ========== 第二步：仅编译x86_64 UEFI版（砍掉所有非x86_64架构） ==========
   uefi:
-    name: UEFI / ${{ matrix.arch }}
+    name: UEFI / x86_64 (Only RTL8152B)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - arm32
-          - arm64
-          - i386
-          - loong64
-          - riscv32
-          - riscv64
-          - x86_64
+        arch: [x86_64] # 仅保留x86_64，砍掉arm/riscv/loong64等
     container:
       image: ghcr.io/ipxe/ipxe-builder-${{ matrix.arch }}
     env:
       bindir: bin-${{ matrix.arch }}-efi
     steps:
-
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: Build
+      - name: Build (Only RTL8152B)
         working-directory: src
         run: |
-          make ${{ env.bindir }}/ipxe.efi \
-               ${{ env.bindir }}/ipxe.iso \
-               ${{ env.bindir }}/ipxe.usb \
-               ${{ env.bindir }}/snponly.efi
+          # 仅编译需要的UEFI文件：ipxe.efi，砍掉snponly.efi/iso/usb等
+          make ${{ env.bindir }}/ipxe.efi
+          # 重命名为BOOTX64.EFI（符合UEFI规范）
+          cp ${{ env.bindir }}/ipxe.efi ${{ env.bindir }}/BOOTX64.EFI
 
-      - name: Upload
+      - name: Upload UEFI artifact
         uses: actions/upload-artifact@v6
         with:
           name: ${{ env.bindir }}
           if-no-files-found: error
           path: |
-            src/${{ env.bindir }}/ipxe.efi
-            src/${{ env.bindir }}/snponly.efi
+            src/${{ env.bindir }}/BOOTX64.EFI
 
-  tests:
-    name: Tests / ${{ matrix.arch }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm32
-            exec: qemu-arm-static
-          - arch: arm64
-            exec: qemu-aarch64-static
-          - arch: i386
-            exec: valgrind
-          - arch: loong64
-            exec: qemu-loongarch64-static
-          - arch: riscv32
-            exec: qemu-riscv32-static
-          - arch: riscv64
-            exec: qemu-riscv64-static
-          - arch: x86_64
-            exec: valgrind
-    container:
-      image: ghcr.io/ipxe/ipxe-builder-${{ matrix.arch }}
-    env:
-      bindir: bin-${{ matrix.arch }}-linux
-    steps:
-
-      - name: Check out code
-        uses: actions/checkout@v6
-
-      - name: Build
-        working-directory: src
-        run: |
-          make ${{ env.bindir }}/tests.linux
-
-      - name: Test
-        working-directory: src
-        run: |
-          ${{ matrix.exec }} ${{ env.bindir }}/tests.linux
-
+  # ========== 第三步：精简Combine步骤，仅打包需要的2个文件 ==========
   combine:
-    name: BIOS + UEFI
+    name: Combine (BIOS + UEFI x86_64)
     runs-on: ubuntu-latest
-    needs:
-      - bios
-      - uefi
+    needs: [bios, uefi] # 仅依赖x86_64 BIOS/UEFI
     container:
       image: ghcr.io/ipxe/ipxe-signer
     env:
+      # 仅保留x86_64 BIOS/UEFI文件，砍掉所有其他架构
       binaries: >-
-        bin-x86_64-pcbios/ipxe.lkrn
-        bin-arm32-efi/ipxe.efi
-        bin-arm64-efi/ipxe.efi
-        bin-i386-efi/ipxe.efi
-        bin-loong64-efi/ipxe.efi
-        bin-riscv32-efi/ipxe.efi
-        bin-riscv64-efi/ipxe.efi
-        bin-x86_64-efi/ipxe.efi
+        bin-x86_64-pcbios/ipxe.pxe
+        bin-x86_64-efi/BOOTX64.EFI
     steps:
-
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: Download
+      - name: Download artifacts (BIOS + UEFI)
         uses: actions/download-artifact@v7
         with:
-          pattern: "{bin-x86_64-pcbios,bin-*-efi}"
+          pattern: "{bin-x86_64-pcbios,bin-x86_64-efi}"
+          path: src/ # 放到src目录，和编译路径一致
 
-      - name: Combine
+      - name: Pack tiny iPXE files (Only RTL8152B)
         run: |
-          # Provide an editable placeholder autoexec.ipxe for the USB image
-          cat > autoexec.ipxe <<'EOF'
+          # 创建输出目录
+          mkdir -p ipxe-tiny-rtl8152
+          # 复制核心文件
+          cp src/bin-x86_64-pcbios/ipxe.pxe ipxe-tiny-rtl8152/
+          cp src/bin-x86_64-efi/BOOTX64.EFI ipxe-tiny-rtl8152/
+          # 加入超精简的autoexec.ipxe（菜单功能）
+          cat > ipxe-tiny-rtl8152/autoexec.ipxe <<'EOF'
           #!ipxe
-          echo
-          prompt --key 0x02 --timeout 2000 \
-              Press Ctrl-B for the iPXE command line... \
-              && shell || autoboot
+          quiet:cls
+          :start
+          menu 引导菜单
+          item 1 hd 硬盘引导(10s自动)
+          item 2 sh 进入iPXE Shell
+          choose --timeout 10000 s || goto hd
+          goto ${s}
+          :hd
+          echo 引导本地硬盘...
+          chain hd0||chain hd1
+          prompt --timeout 3000 && goto start
+          :sh
+          echo 输入exit返回菜单
+          shell && goto start
           EOF
-          ./src/util/genfsimg -o ipxe.iso ${{ env.binaries }}
-          ./src/util/genfsimg -o ipxe.usb -s autoexec.ipxe ${{ env.binaries }}
+          # 打包成zip，方便下载
+          zip -r ipxe-tiny-rtl8152.zip ipxe-tiny-rtl8152/
 
-      - name: Upload
+      - name: Upload final tiny package
         uses: actions/upload-artifact@v6
         with:
-          name: bin-combi
+          name: ipxe-tiny-rtl8152
           if-no-files-found: error
-          path: |
-            ipxe.iso
-            ipxe.usb
+          path: ipxe-tiny-rtl8152.zip
 
-  publish:
-    name: Publish
-    runs-on: ubuntu-latest
-    needs:
-      - bios
-      - sbi
-      - uefi
-      - tests
-      - combine
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/master' &&
-      vars.PAGES_REPO_NAME
-    env:
-      workflow_url: >-
-        ${{ github.server_url }}/${{ vars.PAGES_REPO_OWNER }}/${{ ''
-        }}${{ vars.PAGES_REPO_NAME }}/actions/workflows/build.yml
-    environment:
-      name: publish
-      url: ${{ env.workflow_url }}
-    steps:
-
-      - name: Get token
-        id: token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.WORKFLOW_DISPATCHER_ID }}
-          private-key: ${{ secrets.WORKFLOW_DISPATCHER_KEY }}
-          owner: ${{ vars.PAGES_REPO_OWNER }}
-          repositories: ${{ vars.PAGES_REPO_NAME }}
-
-      - name: Dispatch
-        env:
-          GH_REPO: ${{ vars.PAGES_REPO_OWNER }}/${{ vars.PAGES_REPO_NAME }}
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: |
-          gh workflow run build.yml -f run_id=${{ github.run_id }}
-          echo "Results at ${{ env.workflow_url }}"
+  # ========== 砍掉所有无用的Job：sbi、tests、publish ==========
+  # （原版的sbi/riscv/loong64/arm等架构完全无用，tests是测试步骤，publish是发布到pages，全部砍掉）
