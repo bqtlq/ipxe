@@ -27,9 +27,7 @@ jobs:
       - name: 创建iPXE本地配置文件（关键！）
         working-directory: src
         run: |
-          # 创建local配置目录（若不存在）
           mkdir -p config/local
-          # 写入配置：仅开启USB + RTL8152驱动，关闭所有其他驱动
           cat > config/local/config.h <<'EOF'
           #undef CONFIG_ALL_DRIVERS
           #define CONFIG_USB y
@@ -44,7 +42,6 @@ jobs:
       - name: 编译BIOS版ipxe.pxe（仅RTL8152B）
         working-directory: src
         run: |
-          # 无需命令行传参，配置文件已指定所有驱动
           make ${{ env.bindir }}/ipxe.pxe
 
       - name: 上传BIOS产物
@@ -99,7 +96,7 @@ jobs:
           path: |
             src/${{ env.bindir }}/BOOTX64.EFI
 
-  # 打包最终产物（BIOS+UEFI）- 核心修正：安装zip工具
+  # 打包最终产物（BIOS+UEFI）- 核心修正：用tar替代zip，无需安装任何工具
   combine:
     name: Combine (BIOS + UEFI)
     runs-on: ubuntu-latest
@@ -116,13 +113,9 @@ jobs:
           pattern: "{bin,bin-x86_64-efi}"
           path: src/
 
-      - name: 安装zip工具（解决command not found）
+      - name: 打包超小体积iPXE文件（用tar，无需安装依赖）
         run: |
-          # 更新源并安装zip
-          apt update && apt install -y zip
-
-      - name: 打包超小体积iPXE文件
-        run: |
+          # 创建输出目录
           mkdir -p ipxe-tiny-rtl8152
           # 复制核心文件
           cp src/bin/ipxe.pxe ipxe-tiny-rtl8152/
@@ -145,12 +138,12 @@ jobs:
           echo 输入exit返回菜单
           shell && goto start
           EOF
-          # 打包成zip
-          zip -r ipxe-tiny-rtl8152.zip ipxe-tiny-rtl8152/
+          # 用tar打包（所有容器都内置tar，无需安装）
+          tar -zcvf ipxe-tiny-rtl8152.tar.gz ipxe-tiny-rtl8152/
 
       - name: 上传最终产物
         uses: actions/upload-artifact@v6
         with:
           name: ipxe-tiny-rtl8152
           if-no-files-found: error
-          path: ipxe-tiny-rtl8152.zip
+          path: ipxe-tiny-rtl8152.tar.gz
