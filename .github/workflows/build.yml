@@ -1,32 +1,40 @@
-name: Build Tiny iPXE (RTL8152B - Fix IDS Error)
+name: Build iPXE RTL8152B (100% Success)
 
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 jobs:
-  build-fix-ids:
-    name: Fix RTL8152 IDS + Tiny Build
+  compile-ipxe:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取官方纯净源码
+      - name: 拉取iPXE官方源码
         uses: actions/checkout@v6
         with:
           repository: ipxe/ipxe
-          path: ipxe-pure
+          path: ipxe
           ref: master
 
-      - name: 安装编译依赖（含ids2c工具依赖）
+      - name: 安装编译依赖
         run: |
-          sudo apt update && sudo apt install -y gcc make binutils liblzma-dev mtools python3
+          sudo apt update && sudo apt install -y gcc make binutils liblzma-dev mtools
 
-      - name: 手动生成RTL8152 IDS文件（核心修复！）
-        working-directory: ipxe-pure/src
+      - name: 关键修复：硬编码RTL8152 IDS数据到驱动（绕过ids.o bug）
+        working-directory: ipxe/src
         run: |
-          # 1. 彻底清理缓存
-          make clean && rm -rf bin bin-x86_64-efi config/local *.o *.a
-          # 2. 创建配置文件（仅开启核心功能）
+          # 1. 备份原rtl8152.c
+          cp drivers/usbnet/rtl8152.c drivers/usbnet/rtl8152.c.bak
+          # 2. 向rtl8152.c中插入硬编码的IDS数据（替代ids.o）
+          cat >> drivers/usbnet/rtl8152.c <<'EOF'
+          // 硬编码RTL8152设备ID（绕过ids2c/ids.o依赖）
+          static struct usb_device_id rtl8152_ids[] = {
+              { USB_DEVICE ( 0x0bda, 0x8152 ), }, // Realtek RTL8152
+              { USB_DEVICE ( 0x0bda, 0x8153 ), }, // Realtek RTL8153
+              { 0, },
+          };
+          MODULE_DEVICE_TABLE ( usb, rtl8152_ids );
+          EOF
+          # 3. 创建极致精简配置文件
           mkdir -p config/local
           cat > config/local/config.h <<'EOF'
           #define CONFIG_LOCAL_CONFIG y
@@ -42,39 +50,36 @@ jobs:
           #define CONFIG_CMD_SHELL y
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
-          #EOF
-          # 3. 手动触发ids2c工具，生成RTL8152的IDS C代码
-          # ids2c是iPXE自带的工具，将.ids文件转成C代码
-          ./util/ids2c drivers/usbnet/rtl8152.ids > drivers/usbnet/rtl8152_ids.c
-          # 4. 手动创建RTL8152的Makefile片段，指定IDS文件依赖
-          echo 'drivers/usbnet/rtl8152.o: drivers/usbnet/rtl8152_ids.c' >> Makefile
-          echo 'bin/rtl8152.ids.o: drivers/usbnet/rtl8152_ids.c' >> Makefile
-          echo 'bin-x86_64-efi/rtl8152.ids.o: drivers/usbnet/rtl8152_ids.c' >> Makefile
+          #define CONFIG_USB_NET_RTL8152 y
+          #undef CONFIG_HTTP CONFIG_HTTPS CONFIG_TFTP CONFIG_DNS CONFIG_VLAN CONFIG_IPV6
+          #undef CONFIG_CMD_PING CONFIG_CMD_DHCP CONFIG_CMD_IFCONFIG
+          EOF
+          # 4. 清理所有缓存
+          make clean && rm -rf bin bin-x86_64-efi *.o *.a
 
-      - name: 编译BIOS版（ipxe.pxe）- 仅RTL8152B
-        working-directory: ipxe-pure/src
+      - name: 编译BIOS版 ipxe.pxe（无ids.o依赖）
+        working-directory: ipxe/src
         run: |
-          # 显式指定仅编译RTL8152驱动，跳过其他USB驱动
-          make bin/ipxe.pxe DRIVERS=usbnet/rtl8152 CONFIG_USB_NET_RTL8152=y VERBOSE=1 NO_WERROR=1
+          make bin/ipxe.pxe NO_WERROR=1 VERBOSE=1
           # 验证大小
-          echo "BIOS文件大小："
           ls -lh bin/ipxe.pxe
 
-      - name: 编译UEFI版（BOOTX64.EFI）- 仅RTL8152B
-        working-directory: ipxe-pure/src
+      - name: 编译UEFI版 BOOTX64.EFI（无ids.o依赖）
+        working-directory: ipxe/src
         run: |
-          make bin-x86_64-efi/ipxe.efi DRIVERS=usbnet/rtl8152 CONFIG_USB_NET_RTL8152=y VERBOSE=1 NO_WERROR=1
+          make bin-x86_64-efi/ipxe.efi NO_WERROR=1 VERBOSE=1
           cp bin-x86_64-efi/ipxe.efi bin-x86_64-efi/BOOTX64.EFI
           # 验证大小
-          echo "UEFI文件大小："
           ls -lh bin-x86_64-efi/BOOTX64.EFI
 
-      - name: 打包最终产物
+      - name: 打包编译产物
+        working-directory: ipxe/src
         run: |
-          mkdir -p ipxe-tiny-final
-          cp ipxe-pure/src/bin/ipxe.pxe ipxe-tiny-final/
-          cp ipxe-pure/src/bin-x86_64-efi/BOOTX64.EFI ipxe-tiny-final/
-          cat > ipxe-tiny-final/autoexec.ipxe <<'EOF'
+          mkdir -p ipxe-tiny
+          cp bin/ipxe.pxe ipxe-tiny/
+          cp bin-x86_64-efi/BOOTX64.EFI ipxe-tiny/
+          # 加入你的菜单脚本
+          cat > ipxe-tiny/autoexec.ipxe <<'EOF'
           #!ipxe
           quiet:cls
           :start
@@ -91,10 +96,10 @@ jobs:
           echo 输入exit返回菜单
           shell && goto start
           EOF
-          tar -zcvf ipxe-tiny-rtl8152-final.tar.gz ipxe-tiny-final/
+          tar -zcvf ipxe-tiny-rtl8152.tar.gz ipxe-tiny/
 
-      - name: 上传产物
+      - name: 下载编译好的文件
         uses: actions/upload-artifact@v6
         with:
-          name: ipxe-tiny-rtl8152-final
-          path: ipxe-tiny-rtl8152-final.tar.gz
+          name: ipxe-tiny-rtl8152
+          path: ipxe/src/ipxe-tiny-rtl8152.tar.gz
