@@ -1,32 +1,32 @@
-name: Build Tiny iPXE (RTL8152B Only - Final)
+name: Build Tiny iPXE (RTL8152B - Fix IDS Error)
 
 on:
   push:
   pull_request:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
-  build-pure:
-    name: Pure Official Source + Tiny Build
+  build-fix-ids:
+    name: Fix RTL8152 IDS + Tiny Build
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取官方纯净iPXE源码（不依赖你的fork，避免污染）
+      - name: 拉取官方纯净源码
         uses: actions/checkout@v6
         with:
           repository: ipxe/ipxe
           path: ipxe-pure
-          ref: master # 拉取最新官方稳定版
+          ref: master
 
-      - name: 安装编译依赖（纯净环境）
+      - name: 安装编译依赖（含ids2c工具依赖）
         run: |
-          sudo apt update && sudo apt install -y gcc make binutils liblzma-dev mtools
+          sudo apt update && sudo apt install -y gcc make binutils liblzma-dev mtools python3
 
-      - name: 极致精简配置+强制清理（双重保险）
+      - name: 手动生成RTL8152 IDS文件（核心修复！）
         working-directory: ipxe-pure/src
         run: |
-          # 1. 彻底清理所有缓存（包括隐藏文件）
+          # 1. 彻底清理缓存
           make clean && rm -rf bin bin-x86_64-efi config/local *.o *.a
-          # 2. 创建仅含RTL8152B的配置文件
+          # 2. 创建配置文件（仅开启核心功能）
           mkdir -p config/local
           cat > config/local/config.h <<'EOF'
           #define CONFIG_LOCAL_CONFIG y
@@ -34,7 +34,6 @@ jobs:
           #undef CONFIG_ALL_PROTOCOLS
           #undef CONFIG_ALL_CMD
           #undef CONFIG_ALL_FEATURES
-          #undef CONFIG_IPXE
           #define CONFIG_BIOS y
           #define CONFIG_UEFI y
           #define CONFIG_CONSOLE_VGA y
@@ -43,32 +42,32 @@ jobs:
           #define CONFIG_CMD_SHELL y
           #define CONFIG_USB y
           #define CONFIG_USB_NET y
-          #define CONFIG_USB_NET_RTL8152 y
-          #undef CONFIG_HTTP CONFIG_HTTPS CONFIG_TFTP CONFIG_DNS CONFIG_VLAN CONFIG_IPV6
-          #undef CONFIG_CMD_PING CONFIG_CMD_DHCP CONFIG_CMD_IFCONFIG CONFIG_CMD_BOOT
           #EOF
+          # 3. 手动触发ids2c工具，生成RTL8152的IDS C代码
+          # ids2c是iPXE自带的工具，将.ids文件转成C代码
+          ./util/ids2c drivers/usbnet/rtl8152.ids > drivers/usbnet/rtl8152_ids.c
+          # 4. 手动创建RTL8152的Makefile片段，指定IDS文件依赖
+          echo 'drivers/usbnet/rtl8152.o: drivers/usbnet/rtl8152_ids.c' >> Makefile
+          echo 'bin/rtl8152.ids.o: drivers/usbnet/rtl8152_ids.c' >> Makefile
+          echo 'bin-x86_64-efi/rtl8152.ids.o: drivers/usbnet/rtl8152_ids.c' >> Makefile
 
-      - name: 编译BIOS版（ipxe.pxe）- 双重指定驱动
+      - name: 编译BIOS版（ipxe.pxe）- 仅RTL8152B
         working-directory: ipxe-pure/src
         run: |
-          # 命令行+配置文件双重锁定驱动，VERBOSE=1打印详细日志
-          make bin/ipxe.pxe DRIVERS=usbnet/rtl8152 CONFIG_USB=y VERBOSE=1 NO_WERROR=1
-          # 验证大小+代码段
+          # 显式指定仅编译RTL8152驱动，跳过其他USB驱动
+          make bin/ipxe.pxe DRIVERS=usbnet/rtl8152 CONFIG_USB_NET_RTL8152=y VERBOSE=1 NO_WERROR=1
+          # 验证大小
           echo "BIOS文件大小："
           ls -lh bin/ipxe.pxe
-          echo "BIOS文件代码段大小："
-          size bin/ipxe.pxe
 
-      - name: 编译UEFI版（BOOTX64.EFI）- 双重指定驱动
+      - name: 编译UEFI版（BOOTX64.EFI）- 仅RTL8152B
         working-directory: ipxe-pure/src
         run: |
-          make bin-x86_64-efi/ipxe.efi DRIVERS=usbnet/rtl8152 CONFIG_USB=y VERBOSE=1 NO_WERROR=1
+          make bin-x86_64-efi/ipxe.efi DRIVERS=usbnet/rtl8152 CONFIG_USB_NET_RTL8152=y VERBOSE=1 NO_WERROR=1
           cp bin-x86_64-efi/ipxe.efi bin-x86_64-efi/BOOTX64.EFI
-          # 验证大小+代码段
+          # 验证大小
           echo "UEFI文件大小："
           ls -lh bin-x86_64-efi/BOOTX64.EFI
-          echo "UEFI文件代码段大小："
-          size bin-x86_64-efi/BOOTX64.EFI
 
       - name: 打包最终产物
         run: |
@@ -94,10 +93,8 @@ jobs:
           EOF
           tar -zcvf ipxe-tiny-rtl8152-final.tar.gz ipxe-tiny-final/
 
-      - name: 上传产物+日志
+      - name: 上传产物
         uses: actions/upload-artifact@v6
         with:
           name: ipxe-tiny-rtl8152-final
-          path: |
-            ipxe-tiny-rtl8152-final.tar.gz
-            ipxe-pure/src/*.log # 上传编译日志，方便排查
+          path: ipxe-tiny-rtl8152-final.tar.gz
